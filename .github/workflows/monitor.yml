@@ -1,0 +1,46 @@
+
+name: CPA 모니터링 자동 실행
+
+on:
+  # ★ 6시간마다 자동 실행 (UTC 기준)
+  # 한국시간: 오전 3시, 9시, 오후 3시, 9시
+  schedule:
+    - cron: '0 0,6,12,18 * * *'
+
+  # 수동 실행도 가능 (GitHub에서 버튼 클릭)
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 이전 데이터 복원
+        uses: actions/cache@v4
+        with:
+          path: data/
+          key: cpa-data-${{ github.run_number }}
+          restore-keys: |
+            cpa-data-
+
+      - name: 크롤링 + 디스코드 알림
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python main.py --live --discord
+
+      - name: 데이터 저장 (커밋)
+        run: |
+          git config user.name "CPA Bot"
+          git config user.email "bot@cpa-monitor.local"
+          git add data/ || true
+          git diff --staged --quiet || git commit -m "📊 상품 데이터 업데이트 $(date +%Y-%m-%d_%H:%M)"
+          git push || true
+```
+
