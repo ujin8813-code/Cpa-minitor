@@ -24,7 +24,7 @@ from pathlib import Path
 # ============================================================
 # 설정
 # ============================================================
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "여기에_웹훅_URL")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1473575501653213418/vwIgh-HTWQzgR-Tqay7kYlvsrcEJHnIxjJ6r_8d6xLHJwhvlknmmmgPab_DYycKdlWYJ")
 MIN_SCORE = 50.0          # 이 점수 이상만 추천 (0~100)
 MIN_APPROVAL_PRICE = 30000  # 이 금액 이상만 대상 (원)
 DATA_FILE = "data/products.json"
