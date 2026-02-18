@@ -28,7 +28,7 @@ jobs:
       - name: 크롤링 + 디스코드 알림
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python debug_html.py
+        run: python main.py --live --discord
     
       - name: 데이터 저장 (커밋)
         run: |
