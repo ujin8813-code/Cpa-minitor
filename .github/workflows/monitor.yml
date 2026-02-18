@@ -1,4 +1,4 @@
-gname: CPA 모니터링 자동 실행
+name: CPA 모니터링 자동 실행
 
 on:
   schedule:
