@@ -1,4 +1,4 @@
-name: CPA 모니터링 자동 실행
+gname: CPA 모니터링 자동 실행
 
 on:
   schedule:
@@ -28,7 +28,8 @@ jobs:
       - name: 크롤링 + 디스코드 알림
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: run: python debug_html.py
+        run: python debug_html.py
+    
       - name: 데이터 저장 (커밋)
         run: |
           git config user.name "CPA Bot"
