@@ -219,19 +219,36 @@ class DiscordNotifier:
             return False
 
     def _send(self, payload):
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            self._url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        import subprocess
+        data = json.dumps(payload)
+        print(f"디스코드 URL: {self._url[:60]}...")
+        print(f"메시지 길이: {len(data)}자")
+        result = subprocess.run(
+            [
+                "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                "-X", "POST",
+                "-H", "Content-Type: application/json",
+                "-d", data,
+                self._url,
+            ],
+            capture_output=True, text=True, timeout=15,
         )
-        try:
-            urllib.request.urlopen(req)
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            print(f"디스코드 에러 {e.code}: {body}")
-            raise
+        code = result.stdout.strip()
+        print(f"디스코드 응답 코드: {code}")
+        if code not in ("200", "204"):
+            # 상세 에러 확인
+            result2 = subprocess.run(
+                [
+                    "curl", "-s",
+                    "-X", "POST",
+                    "-H", "Content-Type: application/json",
+                    "-d", data,
+                    self._url,
+                ],
+                capture_output=True, text=True, timeout=15,
+            )
+            print(f"디스코드 에러 상세: {result2.stdout}")
+            raise Exception(f"Discord error: {code}")
 
 
 # ============================================================
