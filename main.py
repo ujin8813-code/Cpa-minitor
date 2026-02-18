@@ -186,41 +186,52 @@ class DiscordNotifier:
     def notify(self, scored_products):
         if not scored_products:
             return
-        embeds = []
-        for item in scored_products[:10]:
+
+        # 심플한 텍스트 메시지로 발송 (embed 대신 - 더 안정적)
+        lines = []
+        lines.append(f"**CPA 추천 상품 {len(scored_products)}개 발견!**")
+        lines.append("")
+
+        for i, item in enumerate(scored_products[:10], 1):
             p = item.product
-            color = 0xFF4444 if item.score >= 80 else 0xFF8C00 if item.score >= 70 else 0x4CAF50
-            embeds.append({
-                "title": f"{'🔥' if item.score >= 80 else '✅'} {p.name}",
-                "color": color,
-                "fields": [
-                    {"name": "💰 승인단가", "value": f"**{p.approval_price:,}원**", "inline": True},
-                    {"name": "📊 점수", "value": f"**{item.score}점**", "inline": True},
-                    {"name": "📁 카테고리", "value": p.category.value, "inline": True},
-                    {"name": "💵 단가", "value": f"기본 {p.base_price:,}원 / 프로모션 {p.promo_price:,}원", "inline": False},
-                    {"name": "📅 기간", "value": f"{p.start_date.strftime('%m/%d')}~{p.end_date.strftime('%m/%d')} ({p.days_remaining}일)", "inline": True},
-                    {"name": "💡 추천이유", "value": "\n".join(item.reasons) or "기준 충족", "inline": False},
-                ],
-                "footer": {"text": f"{p.source} | {datetime.now().strftime('%m/%d %H:%M')}"},
-            })
-        payload = {
-            "username": "💰 CPA 모니터",
-            "content": f"## 🚨 추천 상품 {len(scored_products)}개 발견!",
-            "embeds": embeds,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(self._url, data=data, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req)
+            icon = "🔥" if item.score >= 80 else "✅"
+            lines.append(f"{icon} **[{i}] {p.name}**")
+            lines.append(f"   승인단가: **{p.approval_price:,}원** | 점수: {item.score}점")
+            lines.append(f"   기본: {p.base_price:,}원 / 프로모션: {p.promo_price:,}원")
+            lines.append(f"   카테고리: {p.category.value} | {p.days_remaining}일 남음")
+            if item.reasons:
+                lines.append(f"   {' | '.join(item.reasons)}")
+            lines.append("")
+
+        # 2000자 제한 체크 (디스코드 제한)
+        message = "\n".join(lines)
+        if len(message) > 1900:
+            message = message[:1900] + "\n... (더 많은 상품이 있습니다)"
+
+        self._send({"content": message})
 
     def send_test(self):
         try:
-            payload = {"username": "💰 CPA 모니터", "content": "✅ 연결 성공! 이제 추천 상품 알림을 받습니다."}
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(self._url, data=data, headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req)
+            self._send({"content": "CPA 모니터 연결 성공! 이제 추천 상품 알림을 받습니다."})
             return True
-        except Exception:
+        except Exception as e:
+            print(f"디스코드 에러: {e}")
             return False
+
+    def _send(self, payload):
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            self._url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(req)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            print(f"디스코드 에러 {e.code}: {body}")
+            raise
 
 
 # ============================================================
