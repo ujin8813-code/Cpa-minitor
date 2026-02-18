@@ -1,5 +1,5 @@
 """
-CPA 상품 모니터링 시스템 (올인원 버전)
+CPA 상품 모니터링 시스템 (올인원 버전) v2.0
 
 리플알바에서 돈 되는 상품을 자동으로 찾아 디스코드로 알림을 보냅니다.
 
@@ -8,13 +8,16 @@ CPA 상품 모니터링 시스템 (올인원 버전)
     python main.py --live           → 실제 크롤링 (화면 출력)
     python main.py --live --discord → 실제 크롤링 + 디스코드 알림
     python main.py --test-discord   → 디스코드 연결 테스트
+    python main.py --schedule       → 6시간마다 자동 실행 (크롤링 + 디스코드)
 """
 
 import json
 import os
 import re
 import sys
+import time
 import urllib.request
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -25,9 +28,10 @@ from pathlib import Path
 # 설정
 # ============================================================
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1473686473940144399/iunO8uCdUz-N38CFwjKnsu7eU-Xz-LnDPMasFEZhvooYnwMZE9UFmRQ1rtenGR_lQxHR")
-MIN_SCORE = 50.0          # 이 점수 이상만 추천 (0~100)
+MIN_SCORE = 50.0            # 이 점수 이상만 추천 (0~100)
 MIN_APPROVAL_PRICE = 30000  # 이 금액 이상만 대상 (원)
 DATA_FILE = "data/products.json"
+SCHEDULE_INTERVAL = 6 * 60 * 60  # 6시간 (초)
 
 
 # ============================================================
@@ -187,15 +191,15 @@ class DiscordNotifier:
         if not scored_products:
             return
 
-        # 심플한 텍스트 메시지로 발송 (embed 대신 - 더 안정적)
         lines = []
-        lines.append(f"**CPA 추천 상품 {len(scored_products)}개 발견!**")
+        lines.append(f"**🚨 CPA 추천 상품 {len(scored_products)}개 발견!**")
         lines.append("")
 
         for i, item in enumerate(scored_products[:10], 1):
             p = item.product
             icon = "🔥" if item.score >= 80 else "✅"
             lines.append(f"{icon} **[{i}] {p.name}**")
+            lines.append(f"   머천트: {p.merchant}")
             lines.append(f"   승인단가: **{p.approval_price:,}원** | 점수: {item.score}점")
             lines.append(f"   기본: {p.base_price:,}원 / 프로모션: {p.promo_price:,}원")
             lines.append(f"   카테고리: {p.category.value} | {p.days_remaining}일 남음")
@@ -203,7 +207,6 @@ class DiscordNotifier:
                 lines.append(f"   {' | '.join(item.reasons)}")
             lines.append("")
 
-        # 2000자 제한 체크 (디스코드 제한)
         message = "\n".join(lines)
         if len(message) > 1900:
             message = message[:1900] + "\n... (더 많은 상품이 있습니다)"
@@ -212,17 +215,15 @@ class DiscordNotifier:
 
     def send_test(self):
         try:
-            self._send({"content": "CPA 모니터 연결 성공! 이제 추천 상품 알림을 받습니다."})
+            self._send({"content": "🔔 CPA 모니터 연결 성공! 이제 추천 상품 알림을 받습니다."})
             return True
         except Exception as e:
             print(f"디스코드 에러: {e}")
             return False
 
     def _send(self, payload):
-        import subprocess
         data = json.dumps(payload)
-        print(f"디스코드 URL: {self._url[:60]}...")
-        print(f"메시지 길이: {len(data)}자")
+        print(f"   디스코드 전송 중... (메시지 {len(data)}자)")
         result = subprocess.run(
             [
                 "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
@@ -234,9 +235,8 @@ class DiscordNotifier:
             capture_output=True, text=True, timeout=15,
         )
         code = result.stdout.strip()
-        print(f"디스코드 응답 코드: {code}")
+        print(f"   디스코드 응답: {code}")
         if code not in ("200", "204"):
-            # 상세 에러 확인
             result2 = subprocess.run(
                 [
                     "curl", "-s",
@@ -247,7 +247,7 @@ class DiscordNotifier:
                 ],
                 capture_output=True, text=True, timeout=15,
             )
-            print(f"디스코드 에러 상세: {result2.stdout}")
+            print(f"   디스코드 에러 상세: {result2.stdout}")
             raise Exception(f"Discord error: {code}")
 
 
@@ -266,6 +266,7 @@ class ConsoleNotifier:
             p = item.product
             icon = "🔥" if item.score >= 80 else "✅"
             print(f"\n{icon} [{i}] {p.name}")
+            print(f"   머천트: {p.merchant}")
             print(f"   점수: {item.score}점 | 승인단가: {p.approval_price:,}원")
             print(f"   기본: {p.base_price:,}원 → 프로모션: {p.promo_price:,}원")
             print(f"   카테고리: {p.category.value} | {p.days_remaining}일 남음")
@@ -275,7 +276,7 @@ class ConsoleNotifier:
 
 
 # ============================================================
-# 리플알바 크롤러
+# 리플알바 크롤러 (v2 — 상품명 파싱 개선)
 # ============================================================
 def parse_date(s):
     try:
@@ -333,6 +334,28 @@ class ReplyAlbaScraper:
         date_pat = re.compile(r'(\d{2}\.\d{2}\.\d{2})\s*~\s*(\d{2}\.\d{2}\.\d{2})')
         link_pat = re.compile(r'<a[^>]+href=["\']([^"\']*(?:view|detail|idx)[^"\']*)["\']', re.I)
 
+        # ★ [개선] 상품명 추출용 — 머천트/캠페인 이름 패턴
+        # <a> 태그 안의 텍스트 또는 특정 클래스의 텍스트를 우선 사용
+        name_in_link = re.compile(
+            r'<a[^>]*href=["\'][^"\']*(?:view|detail|idx)[^"\']*["\'][^>]*>(.*?)</a>',
+            re.IGNORECASE | re.DOTALL)
+        # td 또는 div 안에 있는 머천트명 패턴
+        merchant_pat = re.compile(
+            r'(?:머천트|광고주|캠페인명?)\s*(?:</[^>]+>\s*)*(?:<[^>]+>\s*)*\s*([^<]{2,40})',
+            re.IGNORECASE | re.DOTALL)
+
+        # ★ [개선] 상품명으로 쓰면 안 되는 단어들 (대폭 확장)
+        SKIP_WORDS = [
+            "승인시", "기본단가", "프로모션", "전체", "머천트", "리스트",
+            "페이지", "빠르고", "카카오", "전월", "당월", "신청률",
+            "승인율", "순위", "정렬", "검색", "조회", "로그인",
+            "공지사항", "이용약관", "개인정보", "회원가입", "비밀번호",
+            "카테고리", "필터", "전체보기", "더보기", "이전", "다음",
+            "상세보기", "바로가기", "홈으로", "목록으로", "닫기",
+            "등록일", "마감일", "기간", "단가", "수정일",
+            "리플알바", "모바일", "데스크탑", "메뉴", "네비게이션",
+        ]
+
         for i, m in enumerate(approval.finditer(html)):
             pos = m.start()
             ap = int(m.group(1).replace(",", ""))
@@ -346,16 +369,49 @@ class ReplyAlbaScraper:
             sd = parse_date(dm.group(1)) if dm else datetime.now()
             ed = parse_date(dm.group(2)) if dm else datetime(2026, 12, 31)
 
-            clean = re.sub(r'<[^>]+>', ' ', ctx)
-            names = re.findall(r'([가-힣][가-힣a-zA-Z0-9\s]{3,30})', clean)
-            skip = ["승인시", "기본단가", "프로모션", "전체", "머천트", "리스트", "페이지", "빠르고", "카카오"]
-            name = "알수없는 상품"
-            for c in names:
-                c = c.strip()
-                if len(c) >= 4 and not any(s in c for s in skip):
-                    name = c
+            # ★ [개선] 상품명 추출 — 3단계 시도
+            name = None
+            merchant_name = None
+
+            # 1단계: 머천트/캠페인명 패턴에서 찾기
+            mm = merchant_pat.search(ctx)
+            if mm:
+                candidate = re.sub(r'<[^>]+>', '', mm.group(1)).strip()
+                if len(candidate) >= 2 and not any(s in candidate for s in SKIP_WORDS):
+                    merchant_name = candidate
+
+            # 2단계: 링크 텍스트에서 찾기 (가장 정확할 가능성 높음)
+            for lm_name in name_in_link.finditer(ctx):
+                candidate = re.sub(r'<[^>]+>', '', lm_name.group(1)).strip()
+                candidate = re.sub(r'\s+', ' ', candidate)
+                if (len(candidate) >= 3
+                        and len(candidate) <= 50
+                        and not any(s in candidate for s in SKIP_WORDS)
+                        and re.search(r'[가-힣]', candidate)):
+                    name = candidate
                     break
 
+            # 3단계: 폴백 — 일반 한글 텍스트에서 찾기 (기존 방식 개선)
+            if not name:
+                clean = re.sub(r'<[^>]+>', ' ', ctx)
+                clean = re.sub(r'\s+', ' ', clean)
+                # 숫자로만 되거나, 너무 짧거나, skip 단어를 포함하는 건 제외
+                candidates = re.findall(r'([가-힣][가-힣a-zA-Z0-9\s]{2,40})', clean)
+                for c in candidates:
+                    c = c.strip()
+                    if (len(c) >= 3
+                            and not any(s in c for s in SKIP_WORDS)
+                            and not re.match(r'^[0-9\s]+$', c)):
+                        name = c
+                        break
+
+            if not name:
+                name = merchant_name or f"상품 #{i+1}"
+
+            if not merchant_name:
+                merchant_name = name
+
+            # 상품 ID 추출
             lm = link_pat.search(ctx)
             if lm:
                 im = re.search(r'(?:idx|id|no)=(\d+)', lm.group(1))
@@ -364,7 +420,7 @@ class ReplyAlbaScraper:
                 pid = f"ra-{i}-{ap}"
 
             products.append(Product(
-                id=pid, name=name, merchant=name,
+                id=pid, name=name, merchant=merchant_name,
                 category=guess_category(name),
                 base_price=bp, promo_price=pp, approval_price=ap,
                 start_date=sd, end_date=ed, source="replyalba",
@@ -408,21 +464,22 @@ class MockScraper:
 # 메인 파이프라인
 # ============================================================
 def run_pipeline(scraper, analyzer, repository, notifier):
+    print(f"\n⏰ [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 파이프라인 시작")
     print("🔍 상품 수집 중...")
     products = scraper.fetch_products()
     print(f"   → {len(products)}개 발견")
 
     known = repository.get_known_ids()
     new = [p for p in products if p.id not in known]
-    print(f"   → 신규: {len(new)}개")
+    print(f"   → 신규: {len(new)}개 (기존: {len(known)}개)")
 
     if not new:
-        print("📭 신규 상품 없음.")
+        print("📭 신규 상품 없음. 다음 실행까지 대기합니다.")
         return
 
     print("📊 분석 중...")
     recommended = analyzer.analyze(new)
-    print(f"   → 추천: {len(recommended)}개")
+    print(f"   → 추천: {len(recommended)}개 (기준: {analyzer.min_score}점 이상)")
 
     repository.save_products(new)
 
@@ -430,17 +487,73 @@ def run_pipeline(scraper, analyzer, repository, notifier):
         print("📱 알림 발송 중...")
         notifier.notify(recommended)
         print("✅ 완료!")
+    else:
+        print("📭 기준 점수 이상인 상품이 없습니다.")
+
+
+# ============================================================
+# ★ [신규] 스케줄러 — 6시간마다 자동 실행
+# ============================================================
+def run_scheduler(interval=SCHEDULE_INTERVAL):
+    """
+    6시간마다 자동으로 크롤링 + 디스코드 알림 실행
+    서버나 로컬 PC에서 계속 돌려두면 됩니다.
+
+    사용법: python main.py --schedule
+    """
+    print("=" * 55)
+    print("🤖 CPA 자동 모니터링 시작!")
+    print(f"   실행 간격: {interval // 3600}시간")
+    print(f"   추천 기준: {MIN_SCORE}점 이상, {MIN_APPROVAL_PRICE:,}원 이상")
+    print(f"   디스코드: {'✅ 연결됨' if DISCORD_WEBHOOK_URL != '여기에_웹훅_URL' else '❌ URL 미설정'}")
+    print("=" * 55)
+
+    scraper = ReplyAlbaScraper(max_pages=5)
+    analyzer = ProductAnalyzer(MIN_SCORE, MIN_APPROVAL_PRICE)
+    repository = JsonRepository(DATA_FILE)
+    notifier = DiscordNotifier(DISCORD_WEBHOOK_URL)
+
+    run_count = 0
+
+    while True:
+        run_count += 1
+        print(f"\n{'─' * 40}")
+        print(f"📡 실행 #{run_count}")
+
+        try:
+            run_pipeline(scraper, analyzer, repository, notifier)
+        except Exception as e:
+            print(f"❌ 에러 발생: {e}")
+            print("   다음 실행에서 재시도합니다.")
+
+        next_run = datetime.now() + timedelta(seconds=interval)
+        print(f"\n⏳ 다음 실행: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"   ({interval // 3600}시간 후)")
+
+        try:
+            time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\n\n🛑 스케줄러 종료!")
+            print(f"   총 {run_count}회 실행했습니다.")
+            break
 
 
 def main():
     args = sys.argv[1:]
 
+    # 디스코드 테스트
     if "--test-discord" in args:
         print("🔔 디스코드 테스트 중...")
         ok = DiscordNotifier(DISCORD_WEBHOOK_URL).send_test()
         print("✅ 성공!" if ok else "❌ 실패! URL 확인해주세요.")
         return
 
+    # ★ [신규] 스케줄러 모드
+    if "--schedule" in args:
+        run_scheduler()
+        return
+
+    # 기존 모드
     scraper = ReplyAlbaScraper(max_pages=5) if "--live" in args else MockScraper()
     print("🌐 실제 크롤링" if "--live" in args else "🧪 테스트 모드")
 
