@@ -28,7 +28,8 @@ jobs:
       - name: 크롤링 + 디스코드 알림
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python main.py --live --discord
+          REPLYALBA_COOKIE: ${{ secrets.REPLYALBA_COOKIE }}
+        run: python debug_merchant.py
     
       - name: 데이터 저장 (커밋)
         run: |
